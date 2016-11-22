@@ -1,0 +1,16 @@
+{
+    "name": "cmhc/sworker",
+    "description": "only a multiprocess framework for php",
+    "authors": [
+        {
+            "name": "huchao",
+            "email": "hu_chao@139.com"
+        }
+    ],
+    "require": {},
+    "autoload": {
+		"psr-4": {
+			"cmhc\\sworker\\": ""
+		}
+	}
+}
