@@ -39,8 +39,9 @@ class sworkerd
 		 * -s<signal>   需要对 master 进程发送的信号
 		 * -d           daemon 模式，默认不会使用daemon
 		 * -p<pid path> pid保存的路径，默认和程序在同一个目录
+		 * -u<username> 使用哪个用户来执行
 		 */
-		$this->option = getopt("n:s:dp:");//for test
+		$this->option = getopt("n:s:dp:u:");//for test
 		$this->echo = false;
 		$this->processName = get_class($this);
 		if( empty($this->option['p']) || !file_exists($this->option['p'])){
@@ -48,6 +49,10 @@ class sworkerd
 			if( !file_exists($this->option['p']) ){
 				mkdir($this->option['p']);
 			}
+		}
+
+		if( empty($this->option['u']) ){
+			$this->option['u'] = 'root';
 		}
 		$this->pidFile = $this->option['p'] . '/' . $this->processName . '.pid';		
 		$this->doSignal();
@@ -74,16 +79,6 @@ class sworkerd
 		ini_set("display_errors",true);
 		error_reporting(E_ALL);
 		$this->echo = true;
-
-		/**
-		 * 该模式只会让worker进程循环一次,用作测试
-		 */
-		pcntl_signal(SIGHUP, function(){
-			file_put_contents("client_status", '[' . date('Y-m-d H:i:s') . "]master process stop\n", FILE_APPEND);
-			exit();
-		});
-
-		posix_kill(posix_getpid(), SIGHUP);
 		$this->worker();
 		return ;
 
@@ -109,6 +104,12 @@ class sworkerd
 			exit("set sid error");
 		}
 
+		$group = posix_getpwnam($this->option['u']);
+		if( !isset($group['gid']) || !isset($group['uid']) ){
+			exit("user error");
+		}
+		posix_setgid($group['gid']);
+		posix_setuid($group['uid']);
 		/**
 		 * 第二次fork，父进程退出，当前存活的进程为第二子进程，该进程将会作为master进程
 		 * fork 成功保存进程号
@@ -147,15 +148,18 @@ class sworkerd
 			pcntl_signal(SIGHUP, function(){
 				//结束所有子进程
 				if( !empty($this->process) ){
-					foreach( $this->process as $pid=>$v ){
-						posix_kill($pid, SIGHUP);
-						pcntl_waitpid($pid, $status, WUNTRACED);
+					foreach( $this->process as $cpid=>$v ){
+						echo $cpid;
+						posix_kill($cpid, SIGHUP);
+						pcntl_waitpid($cpid, $status, WUNTRACED);
 					}
 				}
-				file_put_contents("client_status", '[' . date('Y-m-d H:i:s') . "] master process stop\n", FILE_APPEND);
-				unlink($this->pidFile);			
+				$this->log("{$this->processName}: master process stop");
+				unlink($this->pidFile);
 				exit();
 			});
+			
+			$this->log("{$this->processName}: master process start");
 
 			/**
 			 * 每隔1s检测信号是否到达，信号到达执行信号
@@ -169,7 +173,7 @@ class sworkerd
 					//restart children
 					$this->restartWorker();
 				}
-    			pcntl_signal_dispatch();
+    			$status = pcntl_signal_dispatch();
 				sleep(1);
 			}
 
@@ -185,20 +189,42 @@ class sworkerd
 
 	/**
 	 * 根据传入的参数发送进程相应的信号量
-	 * 目前仅支持stop
+	 * 支持stop、reload
 	 */
 	public function doSignal()
 	{
 		if( !empty($this->option['s']) ){
 
+			if( !file_exists($this->pidFile) ){
+				exit("pid file not exist");
+			}
+
+			$pid = file_get_contents( $this->pidFile );
 			switch ($this->option['s']) {
+
 				case 'stop':
-					if( file_exists( $this->pidFile ) ){
-						posix_kill( file_get_contents( $this->pidFile ), SIGHUP);
-						echo "process stop\n";
-					}else{
-						exit("pid not exists\n");
+					posix_kill( $pid, SIGHUP);
+					echo "process stopping\n";
+					while( file_exists($this->pidFile) ){
+						usleep(100000);
 					}
+					echo "process stoped\n";
+				break;
+
+				case 'restart':
+
+					posix_kill( $pid, SIGHUP);
+					echo "process restarting\n";
+					while( file_exists($this->pidFile) ){
+						usleep(100000);
+					}
+					$this->restartProcess();
+					echo "process restarted\n";
+				
+				break;
+
+				default:
+					echo "command error\n";
 				break;
 			}
 
@@ -220,12 +246,14 @@ class sworkerd
 	 * 开始 worker 进程
 	 * 执行继承类里面worker方法同时注册信号量实现对worker进程的控制
 	 */
-	public function startWorker()
+	protected function startWorker()
 	{
 		pcntl_signal(SIGHUP, function(){
-			file_put_contents("client_status", '[' . date('Y-m-d H:i:s') . "] worker process stop\n", FILE_APPEND);
+			$this->log("{$this->processName}: worker process stop");
 			exit();
 		});
+
+		$this->log("{$this->processName}: worker process start");
 		while( true ){
 			$this->worker();
 			pcntl_signal_dispatch();
@@ -236,7 +264,7 @@ class sworkerd
 	 * 重新拉起一个worker
 	 * @return
 	 */
-	public function restartWorker()
+	protected function restartWorker()
 	{
 		$pid = pcntl_fork();
 		if($pid > 0){
@@ -248,10 +276,22 @@ class sworkerd
 	}
 
 	/**
+	 * 重启进程
+	 * 当程序文件更改之后需要执行的操作
+	 * @return
+	 */
+	protected function restartProcess()
+	{
+		$script = $_SERVER['argv'][0];
+		$this->log("master process restart");
+		exec("/usr/local/php/bin/php {$script} -d -n{$this->option['n']}", $status);
+	}
+
+	/**
 	 * 重定向输出
 	 * @return
 	 */
-	public function redirectOutput()
+	protected function redirectOutput()
 	{
 		global $stdin, $stdout, $stderr;
 		fclose(STDIN);
@@ -283,4 +323,13 @@ class sworkerd
     	pcntl_signal_dispatch();
     }
 
+    /**
+     * 记录进程运行日志
+     * @param  string $content 
+     * @return 
+     */
+    protected function log($content)
+    {
+		file_put_contents(__DIR__ . "/client.log", '[' . date('Y-m-d H:i:s') . "] {$content}\n", FILE_APPEND);
+    }
 }
