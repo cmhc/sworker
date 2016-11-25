@@ -7,6 +7,7 @@ namespace cmhc\sworker;
 class sworkerd
 {
 
+
 	protected $echo;
 
 	protected $option;
@@ -132,7 +133,7 @@ class sworkerd
 				break;
 			}
 			if( $pid > 0 ){
-				$this->process[$pid] = 1;
+				$this->process[$pid] = $i;
 			}else{
 				break;
 			}
@@ -158,7 +159,8 @@ class sworkerd
 				unlink($this->pidFile);
 				exit();
 			});
-			
+			$this->setProcessTitle($this->processName . ' Master');
+
 			$this->log("{$this->processName}: master process start");
 
 			/**
@@ -169,9 +171,10 @@ class sworkerd
 				$result = pcntl_wait($status, WNOHANG);
 				if( $result > 0 ){
 					//child quit
+					$quitWorkerNum = $this->process[$result];
 					unset($this->process[$result]);
 					//restart children
-					$this->restartWorker();
+					$this->restartWorker($quitWorkerNum);
 				}
     			$status = pcntl_signal_dispatch();
 				sleep(1);
@@ -183,7 +186,7 @@ class sworkerd
 		 * 开始worker进程
 		 */
 		if( $pid == 0 ){
-			$this->startWorker();
+			$this->startWorker($i);
 		}
 	}
 
@@ -246,7 +249,7 @@ class sworkerd
 	 * 开始 worker 进程
 	 * 执行继承类里面worker方法同时注册信号量实现对worker进程的控制
 	 */
-	protected function startWorker()
+	protected function startWorker($i)
 	{
 		pcntl_signal(SIGHUP, function(){
 			$this->log("{$this->processName}: worker process stop");
@@ -254,24 +257,45 @@ class sworkerd
 		});
 
 		$this->log("{$this->processName}: worker process start");
+		$worker = 'worker'.$i;
+		$this->setProcessTitle($this->processName . ' Worker: '. $worker);
 		while( true ){
-			$this->worker();
+			if( method_exists($this, $worker) ){
+				$this->$worker();
+			}else{
+				$this->worker();	
+			}
 			pcntl_signal_dispatch();
 		}
+	}
+
+	/**
+	 * 设置进程名称
+	 */
+	protected function setProcessTitle($title)
+	{
+		//设置进程名称
+        if (function_exists('cli_set_process_title')){
+        	// >=php 5.5
+            cli_set_process_title($title);
+        }else if(extension_loaded('proctitle') && function_exists('setproctitle')){
+        	//扩展
+            setproctitle($title);
+        }
 	}
 
 	/**
 	 * 重新拉起一个worker
 	 * @return
 	 */
-	protected function restartWorker()
+	protected function restartWorker($i)
 	{
 		$pid = pcntl_fork();
 		if($pid > 0){
-			$this->process[$pid] = 1;
+			$this->process[$pid] = $i;
 		}
 		if( $pid == 0 ){
-			$this->startWorker();
+			$this->startWorker($i);
 		}
 	}
 
