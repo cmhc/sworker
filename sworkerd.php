@@ -1,15 +1,27 @@
 <?php
 /**
  * sworker 只是一个多进程框架
+ * 1. 二逼模式 : 多个worker执行同样的任务
+ * 2. 普通模式 : 多个worker执行不同的任务
+ * 4. 牛逼模式 : 开启一个生产者和多个消费者，由dispatcher分发任务给指定的worker执行
+ * 5. 上天模式 : 还没想好
+ *
+ * @author huchao <hu_chao@139.com>
  */
 namespace cmhc\sworker;
 
 class sworkerd
 {
-
-
+	/**
+	 * 主要用作调试
+	 * @var
+	 */
 	protected $echo;
 
+	/**
+	 * 传来的选项数组
+	 * @var 
+	 */
 	protected $option;
 
 	/**
@@ -22,6 +34,26 @@ class sworkerd
 	 * @var array
 	 */
 	protected $process;
+
+	/**
+	 * 由dispatcher维护的各个client连接
+	 * 用作进程之间的通信
+	 * @var array
+	 */
+	protected $clients;
+
+	/**
+	 * 由worker维护的连接
+	 * @var array
+	 */
+	protected $connection;
+
+	/**
+	 * 发送缓冲队列
+	 * @var array
+	 */
+	protected $sendBuffer = array();
+
 
 	/**
 	 * pid文件保存路径
@@ -37,27 +69,55 @@ class sworkerd
 		/**
 		 * option
 		 * -n<num>      需要启动的 worker 进程数
+		 * --job=<job name> 作业名称
 		 * -s<signal>   需要对 master 进程发送的信号
 		 * -d           daemon 模式，默认不会使用daemon
-		 * -p<pid path> pid保存的路径，默认和程序在同一个目录
+		 * --pid=<pid path> pid保存的路径，默认和程序在同一个目录
 		 * -u<username> 使用哪个用户来执行
+		 * -t 			打开测试，将会输出一些调试的信息
 		 */
-		$this->option = getopt("n:s:dp:u:");//for test
+		$long = array(
+			'pid::', //pid保存位置
+			'job::' //作业名称
+			);
+		$this->option = getopt("dn:s:u:t", $long);
+		var_dump($this->option);
 		$this->echo = false;
-		$this->processName = get_class($this);
-		if( empty($this->option['p']) || !file_exists($this->option['p'])){
-			$this->option['p'] = __DIR__ . '/pid';
-			if( !file_exists($this->option['p']) ){
-				mkdir($this->option['p']);
+		$this->processName = strtolower(get_class($this));
+		if( empty($this->option['pid']) || !file_exists($this->option['pid'])){
+			$this->option['pid'] = __DIR__ . '/pid';
+			if( !file_exists($this->option['pid']) ){
+				mkdir($this->option['pid']);
 			}
 		}
 
 		if( empty($this->option['u']) ){
 			$this->option['u'] = 'root';
 		}
-		$this->pidFile = $this->option['p'] . '/' . $this->processName . '.pid';		
+		$this->pidFile = $this->option['pid'] . '/' . $this->processName . '.pid';		
 		$this->doSignal();
 		$this->checkStatus();
+	}
+
+	/**
+	 * 进程结束需要进行的结尾工作
+	 */
+	public function __destruct()
+	{
+
+		//发送一个长度为0的数据,表示dispatcher已经关闭，不再分发任务
+		if( !empty($this->clients) ){
+			foreach ($this->clients as $handle) {
+				socket_write($handle['handle'], pack('n',0), 2);
+			}
+		}
+
+		//关闭worker维护的连接
+		if( $this->connection['handle'] ){
+			fclose($this->connection['handle']);
+			unlink( dirname($this->pidFile) . '/' . $this->connection['name'] . '.sock' );
+		}
+
 	}
 
 	/**
@@ -70,6 +130,11 @@ class sworkerd
 	{
 
 		if( isset($this->option['d']) ){
+			if( isset($this->option['t']) ){
+				ini_set("display_errors",true);
+				error_reporting(E_ALL);
+				$this->echo = true;
+			}
 			$this->daemon();
 			return ;
 		}
@@ -80,7 +145,7 @@ class sworkerd
 		ini_set("display_errors",true);
 		error_reporting(E_ALL);
 		$this->echo = true;
-		$this->worker();
+		$this->worker(0);
 		return ;
 
 	}
@@ -88,9 +153,8 @@ class sworkerd
 	/**
 	 * 以守护进程方式运行
 	 */
-	public function daemon()
+	protected function daemon()
 	{
-
 		/**
 		 * 第一次fork的父进程退出
 		 */
@@ -139,8 +203,6 @@ class sworkerd
 			}
 		}
 
-
-
 		/**
 		 * 父进程注册信号量，检测是否有信号到达，执行相关操作
 		 * 终止父进程首先会停止全部子进程
@@ -149,6 +211,13 @@ class sworkerd
 			pcntl_signal(SIGHUP, function(){
 				//结束所有子进程
 				if( !empty($this->process) ){
+					//按照进程编号排序，数字越大越先结束
+					uasort($this->process, function($a, $b){
+						if( $a == $b ){
+							return 0;
+						}
+						return ($a > $b) ? 1 : -1;
+					});
 					foreach( $this->process as $cpid=>$v ){
 						echo $cpid;
 						posix_kill($cpid, SIGHUP);
@@ -159,6 +228,7 @@ class sworkerd
 				unlink($this->pidFile);
 				exit();
 			});
+
 			$this->setProcessTitle($this->processName . ' Master');
 
 			$this->log("{$this->processName}: master process start");
@@ -194,7 +264,7 @@ class sworkerd
 	 * 根据传入的参数发送进程相应的信号量
 	 * 支持stop、reload
 	 */
-	public function doSignal()
+	protected function doSignal()
 	{
 		if( !empty($this->option['s']) ){
 
@@ -238,7 +308,7 @@ class sworkerd
 	/**
 	 * 检查进程状态，防止进程重复被执行
 	 */
-	public function checkStatus()
+	protected function checkStatus()
 	{
 		if( file_exists( $this->pidFile ) ){
 			exit("process {$this->processName} running\n");
@@ -257,14 +327,26 @@ class sworkerd
 		});
 
 		$this->log("{$this->processName}: worker process start");
-		$worker = 'worker'.$i;
-		$this->setProcessTitle($this->processName . ' Worker: '. $worker);
+
+		//在子进程中自定义进程名称
+		if( method_exists($this, 'customProcessName') ){
+			$workerName = $this->customProcessName($i);
+		}
+
+		if( empty($workerName) ){
+			$workerName = 'worker'.$i;
+		}
+		$this->connection = array('name'=>$workerName,'handle'=>false);
+
+		$this->setProcessTitle($this->processName . ' Worker: '. $workerName);
+		
+		//在worker之前执行的方法，不能是死循环
+		if( method_exists($this, 'beforeWorker') ){
+			$this->beforeWorker($i);
+		}
+		
 		while( true ){
-			if( method_exists($this, $worker) ){
-				$this->$worker();
-			}else{
-				$this->worker();	
-			}
+			$this->worker($i);	
 			pcntl_signal_dispatch();
 		}
 	}
@@ -339,6 +421,15 @@ class sworkerd
     }
 
     /**
+     * 手动指定worker进程的数量
+     * 优先级高于 -n 参数，适用于需要指定子进程数量的程序
+     */
+    protected function setWorkerNum($num)
+    {
+    	$this->option['n'] = $num;
+    }
+
+    /**
      * 中断检测，执行信号
      * @return
      */
@@ -356,4 +447,115 @@ class sworkerd
     {
 		file_put_contents(__DIR__ . "/client.log", '[' . date('Y-m-d H:i:s') . "] {$content}\n", FILE_APPEND);
     }
+
+
+    /*
+    	**********************************************************
+        以下为进程通信部分
+        使用socket通信方式
+    	**********************************************************
+    */
+
+    /**
+     * dispather 和 executor 之间通信
+     * @param  string $dest 目的进程名称
+     * @param  string $data 数据
+     */
+    protected function sendMessage($dest, $data)
+    {
+    	//waiting for client connection
+    	if( !isset($this->clients[$dest]) || $this->clients[$dest]['status'] == -1 ){
+			if( !($server = socket_create(AF_INET, SOCK_STREAM, SOL_TCP)) ){
+				throw new Exception("socket create error", 1);
+			}
+			if( !socket_bind($server, '127.0.0.1') ){
+				throw new Exception("socket bind 127.0.0.1 error", 1);
+			}
+			if( !socket_listen($server) ){
+				throw new Exception("socket listen error", 1);
+			}
+			socket_getsockname($server, $addr, $port);
+			if( !$this->saveWorkerSocket($dest, "tcp://{$addr}:{$port}") ){
+				throw new Exception("save {$dest} socket error", 1);
+			}
+			$this->clients[$dest]['handle'] = socket_accept($server);
+			socket_set_option($this->clients[$dest]['handle'], SOL_SOCKET, SO_SNDBUF, 8192 );
+			$this->clients[$dest]['status'] = 1;
+    	}
+    	
+    	$write = array($this->clients[$dest]['handle']);
+    	socket_select($read, $write, $except, 1);
+    	if( !empty($write) ){
+    		$data = pack("n",strlen($data)) . $data;
+			if( !socket_write($write[0], $data, strlen($data)) ){
+				$this->clients[$dest]['status'] = -1;
+				return false;
+			}
+			return true;
+    	}else{
+    		return false;
+    	}
+    }
+
+
+
+
+    /**
+     * 接收worker发送的数据
+     * 在缓冲区有数据的时候，该方法会返回一条数据，当遇到终止数据发送信号时候，该方法会返回false
+     * 
+     * 业务处理的时候，应该一直调用该方法接收数据，直到返回false为止
+     * 服务端不会保存数据，客户端处理不当会有丢失数据的风险
+     * @return string
+     */
+    protected function receiveMessage()
+    {
+    	while( !$this->connection['handle'] ){
+    		if( !($sock = $this->getWorkerSocket($this->connection['name'])) ||
+    			!($this->connection['handle'] = stream_socket_client($sock))
+			){
+				echo "waiting server\n";
+    			sleep(1);
+    		}
+    	}
+    	if( !($len = stream_socket_recvfrom($this->connection['handle'], 2)) ){
+    		return false;
+    	}
+		$len = unpack("n",$len);
+		//print_r($len);
+
+		//表示数据已经接收完毕，输出false
+		if( $len[1] == 0 ){
+			return false;
+		}
+
+		$content = stream_socket_recvfrom($this->connection['handle'], $len[1]);
+		return $content;
+    }
+
+
+    /**
+     * 保存worker的socket
+     * 目前使用文件的方式
+     * @param  string $name
+     * @param  string $sock
+     * @return
+     */
+    protected function saveWorkerSocket($name, $sock)
+    {
+		return file_put_contents(dirname($this->pidFile) . "/{$name}.sock" , $sock);
+    }
+
+    /**
+     * 获取socket
+     * @param  string $name 当前worker名称
+     * @return string
+     */
+    protected function getWorkerSocket($name){
+    	if( file_exists(dirname($this->pidFile) . "/{$name}.sock") ){
+			return file_get_contents(dirname($this->pidFile) . "/{$name}.sock" );
+    	}
+    	return false;
+    }
+
 }
