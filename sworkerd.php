@@ -4,7 +4,7 @@
  *
  * @author huchao <hu_chao@139.com>
  */
-namespace cmhc\sworker;
+namespace sworker;
 
 abstract class sworkerd
 {
@@ -51,41 +51,10 @@ abstract class sworkerd
 	protected $dispatcher = array();
 
 	/**
-	 * 发送队列
-	 * @var array
-	 */
-	protected $sendQueue = array();
-
-	/**
-	 * 发送队列最大长度
-	 * @var integer
-	 */
-	protected $maxSendQueueLength = 100;
-
-	/**
 	 * 由worker维护的连接
 	 * @var array
 	 */
 	protected $connection;
-
-	/**
-	 * 心跳间隔
-	 * @var integer
-	 */
-	protected $heartbeat = 60;
-
-	/**
-	 * 上次发送心跳时间
-	 * @var integer
-	 */
-	protected $lastSendTime = 0;
-
-	/**
-	 * worker进程中的client互斥锁
-	 * 保证client顺序的连接server
-	 * @var 
-	 */
-	protected $mutex;
 
 	/**
 	 * pid文件保存路径
@@ -94,7 +63,7 @@ abstract class sworkerd
 	protected $pidFile;
 
 	/**
-	 * 子类需要覆盖的workers数组
+	 * worker数组
 	 * @var array
 	 */
 	protected $workers;
@@ -106,6 +75,18 @@ abstract class sworkerd
 	 */
 	private $workerNum;
 
+	/**
+	 * 写入共享内存连接池
+	 * @var array
+	 */
+	private $sendm = array();
+
+
+	/**
+	 * 读取共享内存对象
+	 * @var 
+	 */
+	private $receivem;
 
 	/**
 	 * 初始化参数
@@ -152,20 +133,32 @@ abstract class sworkerd
 	{
 		//发送EOF,表示dispatcher已经关闭，不再分发任务
 		if (!empty($this->dispatcher)) {
-			do {
-				$remainder = $this->sendBufferQueue();
-			} while ( $remainder > 0 );
-
-			foreach ($this->dispatcher['clients'] as $handle) {
-				socket_write($handle['handle'], "EOF\r\n", 5);
+			foreach ($this->dispatcher as $key=>$handle) {
+				if ($key != 'server') {
+					socket_write($handle, "EOF\r\n", 5);
+					socket_shutdown($handle);
+					socket_close($handle);
+				}
 			}
-			unlink( dirname($this->pidFile) . '/' . $this->processName . '.disp' );
 		}
 
 		//关闭worker维护的连接
 		if( $this->connection['handle'] ){
 			fclose($this->connection['handle']);
 		}
+
+		if (!empty($this->receivem)) {
+			shmop_delete($this->receivem);
+			shmop_close($this->receivem);
+		}
+
+		if (!empty($this->sendm)) {
+			foreach ($this->sendm as $m) {
+				shmop_delete($m);
+				shmop_close($m);
+			}
+		}
+
 	}
 
 	/**
@@ -242,10 +235,12 @@ option列表如下
 	/**
 	 * 添加worker
 	 * @param  string $name worker名称，需要传递worker的方法名称
+	 * @return  int 返回索引
 	 */
 	protected function addWorker($name)
 	{
 		$this->workers[] = $name;
+		return count($this->workers) - 1;
 	}
 
 	/**
@@ -526,6 +521,11 @@ option列表如下
 			exit();
 		});
 
+		//自定义的等待信号，让出处理器
+		pcntl_signal(SIGUSR1, function(){
+			//不做任何处理
+		});
+
 		$this->log("{$this->processName}: worker process start");
 
 		//在子进程中自定义进程名称
@@ -536,7 +536,7 @@ option列表如下
 		if( empty($workerName) ){
 			$workerName = 'worker'.$i;
 		}
-		$this->connection = array('name'=>$workerName,'handle'=>false);
+		$this->connection = array('name'=>$workerName, 'handle'=>false);
 
 		$this->setProcessTitle("{$this->processName} Worker : $workerName");
 		
@@ -546,7 +546,7 @@ option列表如下
 		}
 		
 		while( true ){
-			$this->worker($i);	
+			$this->worker($i);
 			pcntl_signal_dispatch();
 		}
 	}
@@ -573,6 +573,9 @@ option列表如下
 	protected function restartWorker($i)
 	{
 		$pid = pcntl_fork();
+		if ($pid < 0) {
+			$this->vardump("fork error, task name {$this->workers[$i]}");
+		}
 		if($pid > 0){
 			$this->process[$pid] = $i;
 		}
@@ -629,6 +632,12 @@ option列表如下
     	pcntl_signal_dispatch();
     }
 
+    public function stop()
+    {
+		$pid = file_get_contents( $this->pidFile );
+		posix_kill( $pid, SIGHUP);
+    }
+
     /**
      * 记录进程运行日志
      * @param  string $content 
@@ -642,12 +651,137 @@ option列表如下
     }
 
 
+
+
+    /* --------------------------- 
+     * 共享内存通信方式
+     * --------------------------- */
+
+    /**
+     * 发送数据
+     * @param   $dest 
+     * @param   $data 
+     * @return
+     */
+    final protected function sendData($dest, $data)
+    {
+    	//共享调度进程pid
+    	//if (!isset($this->dispatcherPid)) {
+    	//	$this->dispatcherPid = $this->setDispatcherPid();
+    	//}
+    	
+    	//不是第一次执行，则需要等待执行者进程进程就绪
+    	//if (!isset($this->notFirstSend)) {
+    	//	pcntl_sigwaitinfo(array(SIGUSR1), $info);
+    	//	$this->notFirstSend = true;
+    	//}
+
+    	$pid = $this->getDestPid($dest);
+    	$this->vardump($pid, "目标pid");
+
+    	if (!$pid) {
+    		return false;
+    	}
+
+       	if (!isset($this->sendm[$dest])) {
+       		$key = 'data' . $dest;
+    		$token = crc32($key);
+    		if (!($this->sendm[$key] = shmop_open($token, 'c', 0644, 8192))) {
+    			throw new Exception("创建共享内存失败", 1);
+    		}
+    	}
+    	//检测是否可以写入
+    	$canWrite = shmop_read($this->sendm[$key], 0, 1);
+    	if ($canWrite != '0') {
+    		$data = '0' . $data;
+	    	if (shmop_write($this->sendm[$key], $data, 0)) {
+	    		$this->vardump($data, '写入数据');
+	    		//给执行者发送信号，表示可以读取了
+	    		posix_kill($pid, SIGUSR1);
+	    		return true;
+	    	}
+    	}
+
+    	return false;
+
+    }
+
+
+    /**
+     * 数据接收
+     * @param  $i
+     * @return 
+     */
+    final protected function receiveData($i)
+    {
+    	//共享自己的pid
+    	if (!isset($this->issetPid)) {
+    		$this->issetPid = $this->setDestPid($i);
+    	}
+    	//等待信号
+    	pcntl_sigwaitinfo(array(SIGUSR1), $info);
+    	//从共享内存读取数据
+    	if (!isset($this->receivem)) {
+    		$token = crc32('data' . $dest);
+    		$this->receivem = shmop_open($token, 'w', 0644, 8192);
+    	}
+		$info = shmop_read($this->receivem, 1, 8192);
+		$this->vardump($info, "收到数据");
+		shmop_write($this->receivem, '1', 0);//表示调度进程可以往共享内存里面写数据
+		if (!$info) {
+			return false;
+		}
+		return $info;
+    }
+
+    /**
+     * 获取子进程的pid
+     * 通过共享内存方式获得
+     */
+    protected function getDestPid($dest)
+    {
+    	$key = 'pid' . $dest;
+    	if (empty($this->sendm[$key])) {
+    		$token = crc32($key);
+    		$this->sendm[$key] = shmop_open($token, 'a', 0644, 4);
+		}
+		if (!$this->sendm[$key]) {
+			return false;
+		}
+		$info = shmop_read($this->sendm[$key], 0, 16);
+		if (!$info) {
+			return false;
+		}
+		//return $info;
+    	$pid = unpack('n', $info);
+    	return $pid[1];
+    }
+
+    /**
+     * 写入pid到共享内存中
+     * @param  int $i i为进程序号
+     */
+    protected function setDestPid($i)
+    {
+    	$key = 'pid' . $this->customProcessName($i);
+		$token = crc32($key);
+		$shm = shmop_open($token, 'c', 0644, 16);
+		if (!$shm) {
+			throw new Exception("创建共享内存失败", 1);
+		}
+		$pid = posix_getpid();
+		$this->vardump($pid, "接收进程pid");
+		$info = shmop_write($shm, pack('L', $pid), 0);
+		return $info;
+    }
+
+
     /*
-    	**********************************************************
-        以下为进程通信部分
-        使用socket通信方式
-        心跳包包采用服务端向客户端发送的方式，间隔为30s
-    	**********************************************************
+	**********************************************************
+    以下为进程通信部分
+    使用socket通信方式
+    心跳包包采用服务端向客户端发送的方式，间隔为30s
+	**********************************************************
     */
    
    	final protected function setServer($server) {
@@ -656,105 +790,33 @@ option列表如下
 
     /**
      * dispather 和 executor 之间通信
-     * dispatcher = array(
-     * 		'server' => <resource>
-     * 		'clients' => array(
-     * 			'dest1'=>array(
-	 *    			'handle'=>
-	 *    			'status'=> 0(繁忙) 1(空闲) -1(断线)
-	 *    		),
-	 *    		...
-	 *    	)
-     * )
      * @param  string $dest 目的进程名称
      * @param  string $data 数据
      */
     final protected function sendMessage($dest, $data)
     {
     	$this->vardump($data, "{$dest}原数据");
-    	//启动调度服务器
-    	if( !isset($this->dispatcher['server']) ){
-    		if (!isset($this->server['ip']) || !isset($this->server['port'])) {
+    	
+    	//创建服务器，只会生成一个$this->dispatcher['server']
+    	$this->createServer();
+
+    	//循环发送队列里面的信息
+    	//该方法会检测是否有链接到达，以及是否存在可写的socket
+		$r = $w = $this->dispatcher;
+    	$e = null;
+    	socket_select($r, $w, $e, null);
+    	if (isset($r['server'])) {
+    		$this->acceptExecutor($r['server']);
+    	}
+    	if (isset($w[$dest])) {
+    		$data .= "\r\n";
+    		if (!socket_write($w[$dest], $data, strlen($data))) {
     			return false;
     		}
-
-			$server = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
-			socket_set_option($server, SOL_SOCKET, SO_REUSEADDR, 1);
-
-			if (!socket_bind($server, $this->server['ip'], $this->server['port'])) {
-				echo $pid = file_get_contents($this->pidFile);
-				posix_kill($pid, SIGTERM);
-			}
-
-			
-			if( !socket_listen($server, 8) ){
-				throw new \Exception("socket listen error", 1);
-			}
-			$this->dispatcher['server'] = $server;
     	}
 
-
-    	//等待worker连接，支持断线重连
-    	if (!isset($this->dispatcher['clients'][$dest])) {
-			$ackDest = $this->waitingForConnection($dest);
-			if (!isset($this->sendQueue[$ackDest])) {
-				$this->sendQueue[$ackDest] = new SplQueue();
-			}
-			if ($ackDest != $dest) {
-				return false;
-			}
-    	}
-
-
-    	if ($this->sendQueue[$dest]->count() > $this->maxSendQueueLength) {
-    		$this->log("{$dest}发送队列已满");
-    		$handleStatus = false;
-    	} else {
-     		$this->sendQueue[$dest]->enqueue($data);
-     		$handleStatus = true;
-    	}
-
-    	$remainder = $this->sendBufferQueue();
-
-		return $handleStatus;
+		return true;
     }
-
-    /**
-     * 发送缓冲数据到队列
-     * @return int 返回队列中的总数据
-     */
-    protected function sendBufferQueue()
-    {
-    	$this->updateClientStatus();
-    	$count = 0;
-    	//发送数据到空闲的worker进程
-    	foreach ($this->sendQueue as $dest=>$sendQueue) {
-    		if (($queueCount = $sendQueue->count()) > 0) {
-    			$count += $queueCount;
-	    		if ($this->dispatcher['clients'][$dest]['status'] == 1) {
-	    			$data = $sendQueue->dequeue();
-		    		$data .= "\r\n";
-		    		$dataLength = strlen($data);
-		    		while (true) {
-		    			$sent = socket_write($this->dispatcher['clients'][$dest]['handle'], $data, $dataLength);
-		    			if ($sent === false) {
-		    				break;
-		    			}
-		    			if ($sent < $dataLength) {
-		    				$data = substr($data, $sent);
-		    				$dataLength -= $sent;
-		    			} else {
-		    				break;
-		    			}
-		    		}
-					$this->dispatcher['clients'][$dest]['status'] = 0;
-	    		}
-    		}
-    	}
-    	return $count;
-    }
-
-
 
     /**
      * 接收worker发送的数据
@@ -766,126 +828,79 @@ option列表如下
      */
     final protected function receiveMessage()
     {
-    	if (!$this->connection['handle'] ) {
-
+    	if (!$this->connection['handle']) {
     		$this->log("{$this->connection['name']}: 连接 server");
-
-    		while (1) {
-    			$sock = "tcp://{$this->server['ip']}:{$this->server['port']}";
-    			if ($this->connection['handle'] = stream_socket_client($sock, $errno, $errstr, -1)) {
-					//等待服务端响应，确保连接已经被accept
-	    			while(fread($this->connection['handle'],2) != 'ok');
-	    			//确认client名称
-	    			fwrite($this->connection['handle'], $this->connection['name']."\n", strlen($this->connection['name'])+1);
-	    			$this->log("{$this->connection['name']}: 握手成功");
-	    			$this->connection['lastactivity'] = time();
-	    			stream_set_timeout($this->connection['handle'], $this->heartbeat);
-	    			break;
-    			}else{
-    				$this->log("client: connection failed {$errstr}({$errno})");
-    				sleep(1);
-    			}
-    		}
+			$sock = "tcp://{$this->server['ip']}:{$this->server['port']}";
+			if ($this->connection['handle'] = stream_socket_client($sock, $errno, $errstr, -1)) {
+    			$w = array($this->connection['handle']);
+    			$r = $e = null;
+    			stream_select($r, $w, $e, null);
+    			fwrite($this->connection['handle'], $this->connection['name']."\n", strlen($this->connection['name'])+1);
+    			$this->log("{$this->connection['name']}: 握手成功");
+			}else{
+				$this->log("client: connection failed {$errstr}({$errno})");
+				sleep(1);
+				return false;
+			}
     	}
-
-    	//长时间未接到数据，服务端可能被阻塞
-    	if (time() - $this->connection['lastactivity'] > $this->heartbeat ) {
-	    	//$this->sendHeartbeat();
-	    	//$this->connection['lastactivity'] = time();
-    	}
-
-		$content = trim(fgets($this->connection['handle'], 8192));
-		if ($content != '') {
-			$this->connection['lastactivity'] = time();
-			fwrite($this->connection['handle'], 1, 1);
-		}
-
-		if ($content == 'EOF' || $content == 'PING' || $content == '') {
-			$content = false;
-		}
-		return $content;
-    }
-
-
-    /**
-     * dispatcher向worker发送心跳包
-     * 需要在业务中的dispatcher中每隔一段时间调用该方法，用来维持心跳
-     * @return
-     */
-    protected function sendHeartbeat()
-    {
-    	foreach ($this->dispatcher['clients'] as $dest=>$handle) {
-    		if (time() - $handle['lastactivity'] > $this->heartbeat/2) {
- 				socket_write($handle['handle'], "PING\r\n", 6);
-    		}
-    	}
-    }
-
-    /**
-     * 检查连接状态
-     * @return array
-     */
-    protected function updateClientStatus()
-    {
-    	$update = 0;
-    	foreach ($this->dispatcher['clients'] as $dest=>$clients) {
-
-    		if (time() - $clients['lastactivity'] > $this->heartbeat*4) {
-    			$this->dispatcher['clients'][$dest]['status'] = -1;
-    			$this->log("server: " . $dest . " 已经断线");
-    			socket_set_nonblock($this->dispatcher['server']);
-    			$this->waitingForConnection($dest);
-    		}
-
-    		$read = array($clients['handle']);
-	    	socket_select($read, $write, $except, 0, 0);
-	    	if (!empty($read)) {
-				$res = socket_read($clients['handle'], 1);
-				if ($res == '1') {
-					$update += 1;
-					$this->dispatcher['clients'][$dest]['status'] = 1;
-					$this->dispatcher['clients'][$dest]['lastactivity'] = time();
-				}
-	    	}
-	    }
-
-	    if ($update == 0) {
-	    	usleep(100000);
-	    }
-
-    	$this->vardump($update,"空闲client数量");
-
-    }
-
-    /**
-     * 等待客户端连接，最大超时时间为10s
-     * @return
-     */
-    protected function waitingForConnection($dest)
-    {
-		$this->log("server: 等待 {$dest} 连接");
-		$try = 0;
-		if (!($handle = socket_accept($this->dispatcher['server']))) {
-			$this->log("server: {$dest} 连接失败，等待下一个周期");
+    	$r = array($this->connection['handle']);
+    	$w = $e = null;
+    	stream_select($r, $w, $e, null);
+		$content = fgets($r[0], 8192);
+		if ($content == false) {
+			$this->connection['handle'] = false; //下一次重新连接
 			return false;
 		}
+		//表示服务端主动关闭
+		if ($content == "EOF\r\n") {
+			return false;
+		}
+		return trim($content);
+    }
 
-		socket_write($handle, 'ok', 2);
-		$ackDest = '';
+    /**
+     * 创建服务器
+     */
+    protected function createServer()
+    {
+    	//启动调度服务器
+    	if( !isset($this->dispatcher['server']) ){
+    		if (!isset($this->server['ip']) || !isset($this->server['port'])) {
+    			return false;
+    		}
+
+			$server = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
+			socket_set_option($server, SOL_SOCKET, SO_REUSEADDR, 1);
+
+			if (!socket_bind($server, $this->server['ip'], $this->server['port'])) {
+				throw new \Exception("socket bind error", 1);
+			}
+
+			if( !socket_listen($server, 8) ){
+				throw new \Exception("socket listen error", 1);
+			}
+			$this->dispatcher['server'] = $server;
+    	}
+    }
+
+    /**
+     * 接收executor的连接
+     */
+    protected function acceptExecutor($socket)
+    {
+    	$handle = socket_accept($socket);
+    	$r = array($handle);
+    	$w = $e = null;
+    	socket_select($r, $w, $e, null);
+    	$dest = '';
 		while(1){
 			$tmp = socket_read($handle, 1);
 			if ($tmp == "\n") {
 				break;
 			}
-			$ackDest .= $tmp;
+			$dest .= $tmp;
 		}
-		$this->dispatcher['clients'][$ackDest] = array(
-				'handle' => $handle,
-				'status' => 1,
-				'lastactivity' => time(),
-			);
-		$this->log("server: 预计和 {$dest} 连接， 收到 {$ackDest} 连接");
-		return $ackDest;
+		$this->dispatcher[$dest] = $handle;
     }
 
 }

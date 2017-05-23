@@ -1,7 +1,7 @@
 <?php
 require __DIR__ . '/sworkerd.php';
 
-use cmhc\sworker\sworkerd;
+use sworker\sworkerd;
 
 class test extends sworkerd
 {
@@ -26,7 +26,8 @@ class test extends sworkerd
 
 	public function writeFile()
 	{
-		file_put_contents(__DIR__ . "/test_content", "running\n",  FILE_APPEND);
+		file_put_contents(__DIR__ . "/testcontent.txt", "running\n",  FILE_APPEND);
+		echo "running\n";
 		sleep(1);
 	}
 }
