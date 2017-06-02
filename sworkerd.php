@@ -100,6 +100,7 @@ abstract class sworkerd
 		 * --pid=<pid path> pid保存的路径，默认和程序在同一个目录
 		 * -u<username> 使用哪个用户来执行
 		 * -t 			开启错误信息
+		 * -l  		    测试循环次数，0使用无限循环
 		 * -T   		调试worker编号
 		 */
 		$longOpt = array(
@@ -107,7 +108,7 @@ abstract class sworkerd
 			'help', //帮助信息
 			'job::',
 			);
-		$opt = "ds:u:tT:" . $this->userOpt;
+		$opt = "ds:u:tT:l:" . $this->userOpt;
 		$this->option = getopt($opt, $longOpt);
 		$this->echo = false;
 		$this->processName = strtolower(get_class($this));
@@ -192,7 +193,21 @@ abstract class sworkerd
 		if( method_exists($this, 'beforeWorker') ){
 			$this->beforeWorker($this->option['T']);
 		}
-		$this->worker($this->option['T']);
+		
+		if (isset($this->option['l'])){
+			if ($this->option['l'] > 0) {
+				for ($i=0; $i<$this->option['l']; $i++) {
+					$this->worker($this->option['T']);
+				}
+			} else {
+				while(1) {
+					$this->worker($this->option['T']);
+				}
+			}
+		} else {
+			$this->worker($this->option['T']);
+		}
+
 		return ;
 	}
 
