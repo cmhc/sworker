@@ -1,13 +1,19 @@
 <?php
+/**
+ * 测试composer的自动加载是否成功
+ */
 namespace tests;
-require dirname(__DIR__) . '/autoload.php';
+require dirname(__DIR__) . '/vendor/autoload.php';
 
 use sworker\Process\Process;
 
 class Test
 {
 
-    static $count = 0;
+    public function normal($i)
+    {
+        echo "ok\n";
+    }
 
     /**
      * 测试普通的方法
@@ -15,21 +21,19 @@ class Test
      */
     public function sleepMethod($i)
     {
-        echo "process:" . $i ."\tcount: ". self::$count . "\tsleep 1s\n";
+        echo "sleep 1s\n";
         sleep(1);
-        self::$count ++;
     }
 
 }
 
 
 $process = new Process();
-
-//一直循环
+//循环一次自动退出
 $process->set(array(
-        'l' => 0
+        'l' => 1
     )
 );
-$process->addWorker('tests\Test', 'sleepMethod');
+$process->addWorker('tests\Test', 'normal');
 $process->addWorker('tests\Test', 'sleepMethod');
 $process->start();

@@ -2,7 +2,7 @@
 /**
  * 进程间消息通信
  */
-namespace Sworker\Messanger;
+namespace sworker\Messanger;
 
 class Messanger
 {

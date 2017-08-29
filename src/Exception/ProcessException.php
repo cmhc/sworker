@@ -1,5 +1,5 @@
 <?php
-namespace Sworker\Exception;
+namespace sworker\Exception;
 
 class ProcessException extends \Exception
 {

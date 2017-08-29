@@ -10,7 +10,7 @@
     "require": {},
     "autoload": {
 		"psr-4": {
-			"cmhc\\sworker\\": ""
+			"sworker\\": "src/"
 		}
 	}
 }

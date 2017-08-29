@@ -3,10 +3,10 @@
  * 测试自定义的参数
  */
 namespace tests;
-require dirname(__DIR__) . '/src/autoloader.php';
+require dirname(__DIR__) . '/autoload.php';
 
-use Sworker\Process\Process;
-use Sworker\Option\Option;
+use sworker\Process\Process;
+use sworker\Option\Option;
 
 class Test
 {

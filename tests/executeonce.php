@@ -1,8 +1,8 @@
 <?php
 namespace tests;
-require dirname(__DIR__) . '/src/autoloader.php';
+require dirname(__DIR__) . '/autoload.php';
 
-use Sworker\Process\Process;
+use sworker\Process\Process;
 
 class Test
 {

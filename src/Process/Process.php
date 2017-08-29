@@ -3,9 +3,9 @@
  * 基本多进程类
  * 使用该类能够进行一些简单的多进程处理
  */
-namespace Sworker\Process;
+namespace sworker\Process;
 
-use Sworker\Option\Option;
+use sworker\Option\Option;
 
 class Process
 {
@@ -113,7 +113,7 @@ class Process
      */
     protected function initProcessInfo()
     {
-        $pidPath = isset($this->options['pid']) ? $this->options['pid'] : dirname(dirname(dirname(__DIR__))) . '/pid';
+        $pidPath = isset($this->options['pid']) ? $this->options['pid'] : dirname(dirname(__DIR__)) . '/pid';
         if (!file_exists($pidPath) && !mkdir($pidPath)) {
             throw new \Sworker\Exception\ProcessException("创建pid文件夹失败", 1);
         }

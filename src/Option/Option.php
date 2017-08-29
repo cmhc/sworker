@@ -2,7 +2,7 @@
 /**
  * 进程中的参数定义
  */
-namespace Sworker\Option;
+namespace sworker\Option;
 
 class Option
 {
