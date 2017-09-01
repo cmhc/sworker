@@ -96,6 +96,7 @@ class Process
     public function setDispatcher()
     {
         $this->workers[$this->workerCount-1]['dispatcher'] = 1;
+        return $this;
     }
 
     /**
@@ -104,6 +105,17 @@ class Process
     public function setExecutor()
     {
         $this->workers[$this->workerCount-1]['executor'] = 1;
+        return $this;
+    }
+
+    /**
+     * 设置执行间隔
+     * @param $seconds 单位为s
+     */
+    public function interval($seconds = 1)
+    {
+        $this->workers[$this->workerCount-1]['interval'] = $seconds;
+        return $this;
     }
 
     /**
@@ -113,11 +125,12 @@ class Process
      */
     protected function initProcessInfo()
     {
-        $pidPath = isset($this->options['pid']) ? $this->options['pid'] : dirname(dirname(__DIR__)) . '/pid';
+        $pidPath = dirname(dirname(__DIR__)) . '/pid';
         if (!file_exists($pidPath) && !mkdir($pidPath)) {
-            throw new \Sworker\Exception\ProcessException("创建pid文件夹失败", 1);
+            throw new \sworker\Exception\ProcessException("创建pid文件夹失败", 1);
         }
-        $this->pidFile = $pidPath . '/' . basename($GLOBALS['argv'][0], '.php') . '.pid';
+        $pidName = isset($this->options['pid']) ? $this->options['pid'] : basename($GLOBALS['argv'][0], '.php') . '.pid';
+        $this->pidFile = $pidPath . '/' . $pidName;
         if (isset($this->options['e'])) {
             error_reporting(E_ALL);
             ini_set('display_errors', true);
@@ -130,7 +143,7 @@ class Process
     protected function checkProcess()
     {
         if (file_exists($this->pidFile)) {
-            throw new \Sworker\Exception\ProcessException("pid文件已经存在", 1);
+            throw new \sworker\Exception\ProcessException("pid文件已经存在", 1);
         }
     }
 
@@ -158,9 +171,15 @@ class Process
         }
         $help = Option::getHelpString();
         $help .= "== worker索引号 ==\n";
-        foreach ($this->workers as $k => $v) {
-            $help .= "[$k]: " . json_encode($v) . "\n";
+        if (!empty($this->workers)) {
+            foreach ($this->workers as $k => $v) {
+                if (is_object($v['class'])) {
+                    $v['class'] = get_class($v['class']);
+                }
+                $help .= "[$k]: " . json_encode($v) . "\n";
+            }
         }
+
         $help .= "\n使用愉快 ^_^\n";
         exit($help);
     }
@@ -171,22 +190,41 @@ class Process
     protected function worker($index)
     {
         if (!isset($this->workers[$index])) {
-            throw new \Sworker\Exception\ProcessException("指定的Worker不存在", 1);
+            throw new \sworker\Exception\ProcessException("指定的Worker不存在", 1);
         }
 
         $worker = $this->workers[$index];
-        $obj = new $worker['class'];
+        if (is_object($worker['class'])) {
+            $obj = $worker['class'];
+            $className = get_class($worker['class']);
+        } else {
+            $obj = new $worker['class'];
+            $className = $worker['class'];
+        }
         $method = $worker['method'];
         $condition = true;
         $count = 0;
         $loop = isset($this->options['l']) ? $this->options['l'] : 1;
-        $this->setProcessTitle('Sworker: '. $worker['class'] . "::" . $method);
+        $this->setProcessTitle('Sworker: '. $className . "::" . $method);
+        
+        //在执行之前，首先执行workerInit,只执行一次
+        $methodInit = $method . 'Init';
+        if (method_exists($obj, $methodInit)) {
+            $obj->$methodInit($index);
+        }
+
         while ($condition) {
             $count++;
             $obj->$method($index, $worker['args']);
             if ($loop != 0 && $count >= $loop) {
                 $condition = false;
             }
+
+            //执行间隔
+            if (isset($worker['interval'])) {
+                sleep($worker['interval']);
+            }
+
             pcntl_signal_dispatch();
         }
     }
@@ -202,14 +240,14 @@ class Process
         }
 
         if (($sid = posix_setsid()) < 0) {
-            throw new \Sworker\Exception\ProcessException("设置会话组失败", 1);
+            throw new \sworker\Exception\ProcessException("设置会话组失败", 1);
         }
 
         $user = isset($this->options['u']) ? $this->options['u'] : 'root';
         $group = posix_getpwnam($user);
 
         if (!isset($group['gid']) || !isset($group['uid'])) {
-            throw new \Sworker\Exception\ProcessException("用户{$user}不存在", 1);
+            throw new \sworker\Exception\ProcessException("用户{$user}不存在", 1);
         }
 
         posix_setgid($group['gid']);
@@ -235,7 +273,7 @@ class Process
         //fork worker进程
         for ($i = 0; $i < $this->workerCount; $i++) {
             if (($pid = pcntl_fork()) == -1) {
-                throw new \Sworker\Exception\ProcessException("fork 进程失败", 1);
+                throw new \sworker\Exception\ProcessException("fork 进程失败", 1);
             }
             if ($pid > 0) {
                 $this->process[$pid] = $i;
@@ -250,7 +288,7 @@ class Process
                 if ($quitPid > 0) {
                     $quitWorkerIndex = $this->process[$quitPid];
                     unset($this->process[$quitPid]);
-                    if ($this->options['l'] == 0) {
+                    if (isset($this->options['l']) && $this->options['l'] == 0) {
                         $this->restartWorker($quitWorkerIndex);
                     }
                 }
@@ -274,7 +312,7 @@ class Process
     protected function restartWorker($i)
     {
         if (($pid = pcntl_fork()) == -1) {
-            throw new \Sworker\Exception\ProcessException("fork 进程失败", 1);
+            throw new \sworker\Exception\ProcessException("fork 进程失败", 1);
         }
 
         if ($pid == 0) {
@@ -321,6 +359,24 @@ class Process
     }
 
     /**
+     * 打印信息
+     */
+    public function vardump($msg, $title = '')
+    {
+        if (!isset($this->options['e'])) {
+            return ;
+        }
+
+        if ($title != '') {
+            echo "=={$title}==\n";
+        }
+
+        echo '[' . date('Y-m-d H:i:s') . '] ';
+        var_dump($msg);
+    }
+
+
+    /**
      * 判断当前进程号是不是主进程
      * @return boolean
      */
@@ -336,22 +392,6 @@ class Process
     {
         pcntl_signal(SIGTERM, array(&$this, 'masterQuitSignal'));
         pcntl_signal(SIGINT, array(&$this, 'childrenQuitSignal'));
-    }
-
-    /**
-     * 打印信息
-     */
-    protected function vardump($msg, $title = '')
-    {
-        if (!isset($this->options['e'])) {
-            return ;
-        }
-
-        if ($title != '') {
-            echo "=={$title}==\n";
-        }
-
-        var_dump($msg);
     }
 
     /**
