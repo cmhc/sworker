@@ -24,13 +24,17 @@ class Test
 
 }
 
-
 $process = new Process();
+
 //循环一次自动退出
 $process->set(array(
         'l' => 1
     )
 );
+
+//加入worker，可以直接使用类的名称
 $process->addWorker('tests\Test', 'normal');
-$process->addWorker('tests\Test', 'sleepMethod');
+//也可以使用实例化之后的类
+$process->addWorker(new \tests\Test, 'sleepMethod');
+//这一步是开始执行
 $process->start();

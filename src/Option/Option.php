@@ -88,14 +88,14 @@ class Option
     public static function add($key, $requireValue, $helpInfo = '')
     {
         if (ord(substr($key, 0, 1)) > 90) {
-            throw new \Sworker\Exception\OptionsException("用户自定义的配置需要使用大写字母或者大写字母开头", 1);
+            throw new Exception("用户自定义的配置需要使用大写字母或者大写字母开头", 1);
         }
         self::$help[$key] = $helpInfo;
         if ($requireValue) {
             $key .= ':';
         }
         if (in_array($key, self::$keys) || in_array($key, self::$longKeys)) {
-            throw new \Sworker\Exception\OptionsException("参数{$key}已经存在", 1);
+            throw new Exception("参数{$key}已经存在", 1);
         }
         if (strlen($key) > 1) {
             self::$longKeys[] = $key;

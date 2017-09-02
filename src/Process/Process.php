@@ -6,6 +6,7 @@
 namespace sworker\Process;
 
 use sworker\Option\Option;
+use sworker\Messenger\Messenger;
 
 class Process
 {
@@ -31,10 +32,29 @@ class Process
      */
     protected $masterPid = 0;
 
+    /**
+     * workers
+     * @var array
+     */
+    protected $workers = array();
+
+    /**
+     * 当前进程索引号
+     * @var integer
+     */
+    protected $index;
+
     public function __construct()
     {
         Option::init();
         $this->options = Option::getAll();
+    }
+
+    /**
+     * 处理在cs模式下面数据发送未完成的的情况
+     */
+    public function __descturt()
+    {
     }
 
     /**
@@ -91,20 +111,24 @@ class Process
     }
 
     /**
-     * 指定为调度器
+     * 指定为调度器，负责数据的发送
      */
-    public function setDispatcher()
+    public function setDispatcher($ip, $port)
     {
         $this->workers[$this->workerCount-1]['dispatcher'] = 1;
+        $this->workers[$this->workerCount-1]['ip'] = $ip;
+        $this->workers[$this->workerCount-1]['port'] = $port;        
         return $this;
     }
 
     /**
-     * 指定为执行者
+     * 指定为执行者，从调度器接收数据
      */
-    public function setExecutor()
+    public function setExecutor($ip, $port)
     {
         $this->workers[$this->workerCount-1]['executor'] = 1;
+        $this->workers[$this->workerCount-1]['ip'] = $ip;
+        $this->workers[$this->workerCount-1]['port'] = $port;
         return $this;
     }
 
@@ -120,14 +144,14 @@ class Process
 
     /**
      * 初始化一些进程信息
-     * 1. pid文件路径
-     * 2. 
+     * 1. pid文件名称
+     * 2. 是否显示错误信息
      */
     protected function initProcessInfo()
     {
         $pidPath = dirname(dirname(__DIR__)) . '/pid';
         if (!file_exists($pidPath) && !mkdir($pidPath)) {
-            throw new \sworker\Exception\ProcessException("创建pid文件夹失败", 1);
+            throw new Exception("创建pid文件夹失败", 1);
         }
         $pidName = isset($this->options['pid']) ? $this->options['pid'] : basename($GLOBALS['argv'][0], '.php') . '.pid';
         $this->pidFile = $pidPath . '/' . $pidName;
@@ -143,12 +167,13 @@ class Process
     protected function checkProcess()
     {
         if (file_exists($this->pidFile)) {
-            throw new \sworker\Exception\ProcessException("pid文件已经存在", 1);
+            throw new Exception("pid文件已经存在", 1);
         }
     }
 
     /**
      * 设置进程名称
+     * @param  string $title 进程名称
      */
     protected function setProcessTitle($title)
     {
@@ -189,8 +214,10 @@ class Process
      */
     protected function worker($index)
     {
+        $this->index = $index;
+
         if (!isset($this->workers[$index])) {
-            throw new \sworker\Exception\ProcessException("指定的Worker不存在", 1);
+            throw new Exception("指定的Worker不存在", 1);
         }
 
         $worker = $this->workers[$index];
@@ -201,12 +228,27 @@ class Process
             $obj = new $worker['class'];
             $className = $worker['class'];
         }
+
         $method = $worker['method'];
         $condition = true;
         $count = 0;
         $loop = isset($this->options['l']) ? $this->options['l'] : 1;
         $this->setProcessTitle('Sworker: '. $className . "::" . $method);
-        
+        $dispatcher = isset($worker['dispatcher']) ? true : false;
+        $executor = isset($worker['executor']) ? true : false;
+
+        //调度模式
+        if ($dispatcher || $executor) {
+            $sendStatus = true;
+            $this->messenger = new Messenger();
+            if ($dispatcher) {
+                $this->messenger->serverStart($worker['ip'], $worker['port']);
+            }
+            if ($executor) {
+                $this->messenger->clientStart($method . $index, $worker['ip'], $worker['port']);
+            }
+        }
+
         //在执行之前，首先执行workerInit,只执行一次
         $methodInit = $method . 'Init';
         if (method_exists($obj, $methodInit)) {
@@ -215,9 +257,33 @@ class Process
 
         while ($condition) {
             $count++;
-            $obj->$method($index, $worker['args']);
+
+            if ($dispatcher && $sendStatus) {
+                //调度进程需要将消息写入msg,发送成功才清空，否则不清空
+                $msg = array();
+            }
+
+            if ($executor) {
+                //执行进程需要获取消息
+                $msg = $this->messenger->receive();
+            }
+
+            $obj->$method($index, $worker['args'], $msg);
+
+            //如果是调度器，则执行发送消息方法
+            if ($dispatcher) {
+                $sendStatus = $this->messenger->send($msg[0], $msg[1]);
+            }
+
             if ($loop != 0 && $count >= $loop) {
                 $condition = false;
+            }
+
+            //executor有消息不终止
+            if ($executor && isset($msg) && $msg) {
+                $condition = true;
+            } else {
+                pcntl_signal_dispatch();
             }
 
             //执行间隔
@@ -225,9 +291,10 @@ class Process
                 sleep($worker['interval']);
             }
 
-            pcntl_signal_dispatch();
         }
     }
+
+
 
     /**
      * 转为守护进程
@@ -240,14 +307,14 @@ class Process
         }
 
         if (($sid = posix_setsid()) < 0) {
-            throw new \sworker\Exception\ProcessException("设置会话组失败", 1);
+            throw new Exception("设置会话组失败", 1);
         }
 
         $user = isset($this->options['u']) ? $this->options['u'] : 'root';
         $group = posix_getpwnam($user);
 
         if (!isset($group['gid']) || !isset($group['uid'])) {
-            throw new \sworker\Exception\ProcessException("用户{$user}不存在", 1);
+            throw new Exception("用户{$user}不存在", 1);
         }
 
         posix_setgid($group['gid']);
@@ -273,7 +340,7 @@ class Process
         //fork worker进程
         for ($i = 0; $i < $this->workerCount; $i++) {
             if (($pid = pcntl_fork()) == -1) {
-                throw new \sworker\Exception\ProcessException("fork 进程失败", 1);
+                throw new Exception("fork 进程失败", 1);
             }
             if ($pid > 0) {
                 $this->process[$pid] = $i;
@@ -312,7 +379,7 @@ class Process
     protected function restartWorker($i)
     {
         if (($pid = pcntl_fork()) == -1) {
-            throw new \sworker\Exception\ProcessException("fork 进程失败", 1);
+            throw new Exception("fork 进程失败", 1);
         }
 
         if ($pid == 0) {
