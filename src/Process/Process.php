@@ -38,12 +38,6 @@ class Process
      */
     protected $workers = array();
 
-    /**
-     * 当前进程索引号
-     * @var integer
-     */
-    protected $index;
-
     public function __construct()
     {
         Option::init();
@@ -77,19 +71,16 @@ class Process
         $this->initProcessInfo();
         $this->helpInfo();
         $this->registerCommand();
-        // 检查进程是否正在运行
-        $this->checkProcess();
+ 
         if (isset($this->options['i'])) {
             $this->worker($this->options['i']);
+            return ;
         }
-        //没有pcntl，只允许执行一个worker
-        if (!extension_loaded('pcntl')) {
-            echo "系统没有安装Pcntl扩展，只允许执行第一个worker\n";
-            $this->worker(0);
-            exit;
-        }
+
         //守护进程
         if (isset($this->options['d'])) {
+            // 检查进程是否正在运行
+            $this->checkProcess();            
             $this->daemonize();
         }
 
@@ -214,10 +205,14 @@ class Process
      */
     protected function worker($index)
     {
-        $this->index = $index;
-
         if (!isset($this->workers[$index])) {
             throw new Exception("指定的Worker不存在", 1);
+        }
+
+        if (extension_loaded('pcntl')) {
+            $pcntlExists = true;
+        } else {
+            $pcntlExists = false;
         }
 
         $worker = $this->workers[$index];
@@ -236,6 +231,7 @@ class Process
         $this->setProcessTitle('Sworker: '. $className . "::" . $method);
         $dispatcher = isset($worker['dispatcher']) ? true : false;
         $executor = isset($worker['executor']) ? true : false;
+        $msg = null;
 
         //调度模式
         if ($dispatcher || $executor) {
@@ -262,7 +258,6 @@ class Process
                 //调度进程需要将消息写入msg,发送成功才清空，否则不清空
                 $msg = array();
             }
-
             if ($executor) {
                 //执行进程需要获取消息
                 $msg = $this->messenger->receive();
@@ -283,7 +278,7 @@ class Process
             if ($executor && isset($msg) && $msg) {
                 $condition = true;
             } else {
-                pcntl_signal_dispatch();
+                $pcntlExists && pcntl_signal_dispatch();
             }
 
             //执行间隔
