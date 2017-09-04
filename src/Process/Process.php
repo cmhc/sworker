@@ -7,8 +7,9 @@ namespace sworker\Process;
 
 use sworker\Option\Option;
 use sworker\Messenger\Messenger;
+use sworker\Base\Base;
 
-class Process
+class Process extends Base
 {
     protected $options = array();
 
@@ -38,10 +39,17 @@ class Process
      */
     protected $workers = array();
 
+    /**
+     * master进程执行的方法
+     * @var array
+     */
+    protected $master = array();
+
     public function __construct()
     {
         Option::init();
         $this->options = Option::getAll();
+
     }
 
     /**
@@ -85,6 +93,18 @@ class Process
         }
 
         $this->startWorker();
+    }
+
+    /**
+     * 添加master进程做的事情，不可以阻塞
+     * 比如在写webserver的时候，可以使用addGlobal添加监听，然后各个子进程都会监听
+     */
+    public function addMaster($class, $method)
+    {
+        $this->master = array(
+            'class' => $class,
+            'method' => $method
+        );
     }
 
     /**
@@ -332,6 +352,15 @@ class Process
      */
     protected function startWorker()
     {
+        if ($this->master) {
+            if (is_object($this->master['class'])) {
+                $obj = $this->master['class'];
+            } else {
+                $obj = new $this->master['class'];
+            }
+            $method = $this->master['method'];
+            $obj->$method();
+        }
         //fork worker进程
         for ($i = 0; $i < $this->workerCount; $i++) {
             if (($pid = pcntl_fork()) == -1) {
@@ -401,12 +430,13 @@ class Process
         });
 
         foreach ($this->process as $pid => $index) {
-            posix_kill($pid, SIGINT);
+            $result = posix_kill($pid, SIGINT);
+            $this->log("KILL -SIGINT {$pid}, result: {$result}");
             pcntl_waitpid($pid, $status, WUNTRACED);
-            $this->vardump("子进程{$pid}退出");
+            $this->log("子进程{$pid}退出");
         }
         @unlink($this->pidFile);
-        $this->vardump("主进程退出");
+        $this->log("主进程退出");
         exit;
     }
 
@@ -498,7 +528,13 @@ class Process
         fclose(STDOUT);
         fclose(STDERR);
         $stdin = fopen('/dev/null', 'r');
-        $stdout = fopen('/tmp/client.out','a');
-        $stderr = fopen('/tmp/client.err','a');
+        if (isset($this->options['e'])) {
+            $stdout = fopen('/tmp/client.out','a');
+            $stderr = fopen('/tmp/client.err','a');
+        } else {
+            $stdout = fopen('/dev/null','a');
+            $stderr = fopen('/dev/null','a');
+        }
+
     }
 }
