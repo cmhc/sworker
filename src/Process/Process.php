@@ -248,7 +248,7 @@ class Process extends Base
         $condition = true;
         $count = 0;
         $loop = isset($this->options['l']) ? $this->options['l'] : 1;
-        $this->setProcessTitle('Sworker: '. $className . "::" . $method);
+        $this->setProcessTitle('Sworker: '. $className . "::" . $method . $index);
         $dispatcher = isset($worker['dispatcher']) ? true : false;
         $executor = isset($worker['executor']) ? true : false;
         $msg = null;
