@@ -109,9 +109,19 @@ class Messenger extends Base
      */
     public function receive()
     {
+        if($this->connection['handle'] == false) {
+            return false;
+        }
+        
         $r = array($this->connection['handle']);
         $w = $e = null;
         stream_select($r, $w, $e, null);
+        
+        if (!is_resource($r[0])) {
+            $this->connection['handle'] = false; //下一次重新连接
+            return false;
+        }
+
         $content = fgets($r[0], 8192);
         if ($content == false) {
             $this->connection['handle'] = false; //下一次重新连接

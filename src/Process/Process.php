@@ -278,6 +278,7 @@ class Process extends Base
                 //调度进程需要将消息写入msg,发送成功才清空，否则不清空
                 $msg = array();
             }
+
             if ($executor) {
                 //执行进程需要获取消息
                 $msg = $this->messenger->receive();
@@ -285,8 +286,9 @@ class Process extends Base
 
             $obj->$method($index, $worker['args'], $msg);
 
-            //如果是调度器，则执行发送消息方法
-            if ($dispatcher) {
+            //如果是调度器，则执行发送消息方法,msg为引用参数
+            //方法执行完成之后，方法需要发送的消息会保存参数$msg中
+            if ($dispatcher && !empty($msg)) {
                 $sendStatus = $this->messenger->send($msg[0], $msg[1]);
             }
 
