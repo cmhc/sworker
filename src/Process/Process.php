@@ -6,7 +6,7 @@
 namespace sworker\Process;
 
 use sworker\Option\Option;
-use sworker\Messenger\Messenger;
+use sworker\Messenger;
 use sworker\Base\Base;
 
 class Process extends Base
@@ -57,6 +57,7 @@ class Process extends Base
      */
     public function __descturt()
     {
+        
     }
 
     /**
@@ -123,23 +124,23 @@ class Process extends Base
 
     /**
      * 指定为调度器，负责数据的发送
+     * @param  array $sock 如果含有ip和port，则使用tcp模式，如果只有sock，则使用ipc模式
      */
-    public function setDispatcher($ip, $port)
+    public function setDispatcher($sock)
     {
         $this->workers[$this->workerCount-1]['dispatcher'] = 1;
-        $this->workers[$this->workerCount-1]['ip'] = $ip;
-        $this->workers[$this->workerCount-1]['port'] = $port;        
+        $this->workers[$this->workerCount-1]['sock'] = $sock;
         return $this;
     }
 
     /**
      * 指定为执行者，从调度器接收数据
+     * @param  array $sock 如果含有ip和port，则使用tcp模式，如果只有sock，则使用ipc模式
      */
-    public function setExecutor($ip, $port)
+    public function setExecutor($sock)
     {
         $this->workers[$this->workerCount-1]['executor'] = 1;
-        $this->workers[$this->workerCount-1]['ip'] = $ip;
-        $this->workers[$this->workerCount-1]['port'] = $port;
+        $this->workers[$this->workerCount-1]['sock'] = $sock;
         return $this;
     }
 
@@ -150,6 +151,19 @@ class Process extends Base
     public function interval($seconds = 1)
     {
         $this->workers[$this->workerCount-1]['interval'] = $seconds;
+        return $this;
+    }
+
+    /**
+     * 设置某个时间之后才会运行
+     * 当前时间比这个时间要小的话，则会进入下一个周期运行，使用interval设定运行周期
+     * @param  string $time 美国英语日期格式的字符串，比如 2017-10-10 01:01:00
+     */
+    public function after($time)
+    {
+        if ($time = strtotime($time)) {
+            $this->workers[$this->workerCount-1]['after'] = $time;
+        }
         return $this;
     }
 
@@ -256,13 +270,36 @@ class Process extends Base
         //调度模式
         if ($dispatcher || $executor) {
             $sendStatus = true;
-            $this->messenger = new Messenger();
-            if ($dispatcher) {
-                $this->messenger->serverStart($worker['ip'], $worker['port']);
+            if (isset($worker['sock']['ip'])) {
+                $this->messenger = new Messenger\TCP();
+                if ($dispatcher) {
+                    $this->messenger->serverStart($worker['sock']['ip'], $worker['sock']['port']);
+                }
+                if ($executor) {
+                    $this->messenger->clientStart($method . $index, $worker['sock']['ip'], $worker['sock']['port']);
+                }
+            } else if (isset($worker['sock']['sock'])) {
+                $this->messenger = new Messenger\IPC();
+                if ($dispatcher) {
+                    $this->messenger->serverStart($worker['sock']['sock']);
+                }
+                if ($executor) {
+                    $this->messenger->clientStart($method . $index, $worker['sock']['sock']);
+                }
             }
-            if ($executor) {
-                $this->messenger->clientStart($method . $index, $worker['ip'], $worker['port']);
+        }
+
+        //判断是否有延后设置
+        if (isset($worker['after'])) {
+            $now = time();
+            if ($worker['after'] < $now) {
+                $interval = $worker['interval'] ? $worker['interval'] : 1;
+                while ($worker['after'] < $now) {
+                    $worker['after'] += $interval;
+                }
             }
+            $this->log("定时在" .($worker['after'] - $now) . "s 之后运行");
+            sleep($worker['after'] - $now);
         }
 
         //在执行之前，首先执行workerInit,只执行一次
@@ -272,7 +309,6 @@ class Process extends Base
         }
 
         while ($condition) {
-            $count++;
 
             if ($dispatcher && $sendStatus) {
                 //调度进程需要将消息写入msg,发送成功才清空，否则不清空
@@ -284,6 +320,14 @@ class Process extends Base
                 $msg = $this->messenger->receive();
             }
 
+            //executor有消息不终止
+            if ($executor && isset($msg) && $msg) {
+                $condition = true;
+            } else {
+                $pcntlExists && pcntl_signal_dispatch();
+            }
+
+            //worker方法
             $obj->$method($index, $worker['args'], $msg);
 
             //如果是调度器，则执行发送消息方法,msg为引用参数
@@ -292,22 +336,17 @@ class Process extends Base
                 $sendStatus = $this->messenger->send($msg[0], $msg[1]);
             }
 
-            if ($loop != 0 && $count >= $loop) {
-                $condition = false;
+            if ($loop != 0) {
+                $count++;
+                if ($count >= $loop) {
+                    $condition = false;
+                }
             }
 
-            //executor有消息不终止
-            if ($executor && isset($msg) && $msg) {
-                $condition = true;
-            } else {
-                $pcntlExists && pcntl_signal_dispatch();
-            }
-
-            //执行间隔
+            //判断是否有执行间隔
             if (isset($worker['interval'])) {
                 sleep($worker['interval']);
             }
-
         }
     }
 
@@ -435,7 +474,7 @@ class Process extends Base
             $result = posix_kill($pid, SIGINT);
             $this->log("KILL -SIGINT {$pid}, result: {$result}");
             pcntl_waitpid($pid, $status, WUNTRACED);
-            $this->log("子进程{$pid}退出");
+            $this->log("子进程{$pid}退出, status: {$status}");
         }
         @unlink($this->pidFile);
         $this->log("主进程退出");
@@ -469,6 +508,13 @@ class Process extends Base
         var_dump($msg);
     }
 
+    /**
+     * 中断检查
+     */
+    public static function breakCheck()
+    {
+        pcntl_signal_dispatch();
+    }
 
     /**
      * 判断当前进程号是不是主进程
@@ -505,7 +551,7 @@ class Process extends Base
 
         switch ($this->options['s']) {
             case 'stop':
-                posix_kill( $pid, SIGTERM);
+                posix_kill($pid, SIGTERM);
                 echo "process stopping\n";
                 while (file_exists($this->pidFile)) {
                     usleep(100000);

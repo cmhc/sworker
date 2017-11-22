@@ -30,16 +30,17 @@ class Test
         }
 
         ++$this->data;
-        $dest = 1;
+        $dest = rand(1, 2);
 
         //空的参数表示发送成功，否则发送失败
         if (empty($msg)) {
-            $msg = array("executor".$dest, $this->data);
+            $msg = array("executor" . $dest, $this->data);
         } else {
             $this->data = $msg[1];
         }
 
         echo "dispatcher发送数据: $this->data\n";
+        usleep(100000);
     }
 
     /**
@@ -47,7 +48,7 @@ class Test
      */
     public function executor($i, $args, &$msg)
     {
-        echo "executor{$i}接收到的数据: {$msg}\n";
+        file_put_contents('/tmp/tmp'.$i, "executor{$i}接收到的数据: {$msg}\n", FILE_APPEND);
         usleep(100000);
         //接受的最后一个消息应该是1000
     }
@@ -56,9 +57,9 @@ class Test
 $process = new Process();
 
 //加入worker，可以直接使用类的名称
-$process->addWorker('tests\Test', 'dispatcher')->setDispatcher('0.0.0.0', 10001);
-$process->addWorker('tests\Test', 'executor')->setExecutor('127.0.0.1', 10001);
-$process->addWorker('tests\Test', 'executor')->setExecutor('127.0.0.1', 10001);
+$process->addWorker('tests\Test', 'dispatcher')->setDispatcher(array('ip'=>'0.0.0.0', 'port' => 10001));
+$process->addWorker('tests\Test', 'executor')->setExecutor(array('ip'=>'127.0.0.1', 'port' => 10001));
+$process->addWorker('tests\Test', 'executor')->setExecutor(array('ip'=>'127.0.0.1', 'port' => 10001));
 
 
 //这一步是开始执行
