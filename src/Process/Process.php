@@ -205,8 +205,8 @@ class Process extends Base
         if (function_exists('cli_set_process_title')) {
             // >=php 5.5
             cli_set_process_title($title);
-        }else if(extension_loaded('proctitle') && function_exists('setproctitle')) {
-            //扩展
+        } else if(extension_loaded('proctitle') && function_exists('setproctitle')) {
+            //extension
             setproctitle($title);
         }
     }
