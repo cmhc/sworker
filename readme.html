@@ -1015,10 +1015,9 @@ body .markdown-body
   }
 }
 </style><title>readme</title></head><body><article class="markdown-body"><h1 id="sworker"><a name="user-content-sworker" href="#sworker" class="headeranchor-link" aria-hidden="true"><span class="headeranchor"></span></a>sworker</h1>
-<p>一个多进程框架。</p>
-<h1 id="_1"><a name="user-content-_1" href="#_1" class="headeranchor-link" aria-hidden="true"><span class="headeranchor"></span></a>使用方式</h1>
-<h3 id="_2"><a name="user-content-_2" href="#_2" class="headeranchor-link" aria-hidden="true"><span class="headeranchor"></span></a>普通多进程模式</h3>
-<p>多进程框架相当于一个容器，而你需要做的就是编写你所需要运行的方法，放在这个容器中去运行。下面给出一个测试方法：</p>
+<p>一个多进程框架。下面介绍sworker的使用方式</p>
+<h2 id="_1"><a name="user-content-_1" href="#_1" class="headeranchor-link" aria-hidden="true"><span class="headeranchor"></span></a>普通多进程模式</h2>
+<p>多进程框架相当于一个容器，而你需要做的就是编写你所需要运行的方法，放在这个容器中去运行。以一个测试类Test为例：</p>
 <pre><code>class Test
 {
     static $count = 0;
@@ -1044,7 +1043,7 @@ $process-&gt;addWorker(new Test(), 'sleepMethod');
 //这一步是开始执行
 $process-&gt;start();
 </code></pre>
-<h3 id="_3"><a name="user-content-_3" href="#_3" class="headeranchor-link" aria-hidden="true"><span class="headeranchor"></span></a>任务执行间隔以及定时执行</h3>
+<h3 id="_2"><a name="user-content-_2" href="#_2" class="headeranchor-link" aria-hidden="true"><span class="headeranchor"></span></a>任务执行间隔以及定时执行</h3>
 <p>可以将Sworker当做是一个crontab，能够让任务在某个时间之后，以每隔一定时间执行一次，只要使用<code>Process::after()</code> 和 <code>Process::interval()</code>，  <br />
 ,这两个方法就可以实现定时任务了。代码示例如下。</p>
 <pre><code>class Test
@@ -1071,4 +1070,23 @@ $process-&gt;start();
 <pre><code>Process::after($second[, $minute[, int $hour[, $day[, $month[, $year]]]]])
 
 Process::interval($seconds)
-</code></pre></article></body></html>
+</code></pre>
+<h3 id="_3"><a name="user-content-_3" href="#_3" class="headeranchor-link" aria-hidden="true"><span class="headeranchor"></span></a>参数</h3>
+<p>默认情况下，Sworker内置了一些参数，通过-h或者&ndash;help参数可以看到</p>
+<pre><code>-d &lt;value&gt;          daemon模式
+-e &lt;value&gt;          开启调试模式
+-h &lt;value&gt;          显示帮助信息
+-i &lt;value&gt;          指定执行某个worker，可以使用-h参数查看worker索引号
+-s &lt;value&gt;          给主进程发送信号，支持stop信号，终止进程
+-l &lt;value&gt;          指定循环次数，0为无限循环
+-u &lt;value&gt;          指定以某个用户来执行该程序
+--pid=&lt;value&gt;       pid路径
+--help=&lt;value&gt;      输出帮助信息
+</code></pre>
+<p>当然，可以扩充这些参数，Sworker提供Option类来扩充参数。在调用Process::addWorker()之前, 使用Option::add()方法来增加自定义的参数</p>
+<pre><code>Option::add(String $name[, Boolean $required = false[, String $description = '']]);
+</code></pre>
+<p>name            参数名称必须以大写字母开头，和系统定义的参数区分开<br />
+required        表明是否是必须要有值的参数<br />
+description     通过help打印出的描述信息</p>
+<h3 id="_4"><a name="user-content-_4" href="#_4" class="headeranchor-link" aria-hidden="true"><span class="headeranchor"></span></a>进程通信</h3></article></body></html>

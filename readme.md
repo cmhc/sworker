@@ -1,10 +1,6 @@
 # sworker
 
-一个多进程框架。
-
-# 使用方式
-
-
+一个多进程框架。下面介绍sworker的使用方式
 
 ## 普通多进程模式
 
@@ -66,5 +62,27 @@
     Process::after($second[, $minute[, int $hour[, $day[, $month[, $year]]]]])
 
     Process::interval($seconds)
+
+### 参数
+
+默认情况下，Sworker内置了一些参数，通过-h或者--help参数可以看到
+
+    -d <value>          daemon模式
+    -e <value>          开启调试模式
+    -h <value>          显示帮助信息
+    -i <value>          指定执行某个worker，可以使用-h参数查看worker索引号
+    -s <value>          给主进程发送信号，支持stop信号，终止进程
+    -l <value>          指定循环次数，0为无限循环
+    -u <value>          指定以某个用户来执行该程序
+    --pid=<value>       pid路径
+    --help=<value>      输出帮助信息
+
+当然，可以扩充这些参数，Sworker提供Option类来扩充参数。在调用Process::addWorker()之前, 使用Option::add()方法来增加自定义的参数
+
+    Option::add(String $name[, Boolean $required = false[, String $description = '']]);
+
+name            参数名称必须以大写字母开头，和系统定义的参数区分开
+required        表明是否是必须要有值的参数
+description     通过help打印出的描述信息
 
 ### 进程通信

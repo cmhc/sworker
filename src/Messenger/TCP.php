@@ -42,7 +42,6 @@ class TCP extends Messenger
                 $this->acceptExecutor($r[0]);
             }
         }
-
     }
 
     /**

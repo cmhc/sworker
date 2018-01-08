@@ -11,12 +11,13 @@ class Test
 {
     public function testsleep()
     {
+    	echo "sleep 60s\n";
         sleep(60);
     }
 
     public function cron($i)
     {
-        file_put_contents('/tmp/sworker_cron.log', date('Y-m-d H:i:s') . " cron任务已经执行,下次执行时间" . date('Y-m-d H:i:s', time() + 60) . "\n", FILE_APPEND);
+        echo date('Y-m-d H:i:s') . " cron任务已经执行,下次执行时间" . date('Y-m-d H:i:s', time() + 60) . "\n";
     }
 }
 
