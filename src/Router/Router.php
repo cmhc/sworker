@@ -46,7 +46,29 @@ class Router extends Base
 	 */
 	protected $ecode = 0;
 
-	public function listen($ip, $port)
+	/**
+	 * create、bind and listen a port
+	 * @param string $ip
+	 * @param integer $port 
+	 */
+	public function __construct($ip, $port)
+	{
+		$this->listen($ip, $port);
+	}
+
+	/**
+	 * accept and receive 
+	 */
+	public function start()
+	{
+		$this->accept();
+		$this->receive();
+	}
+
+	/**
+	 * listen
+	 */
+	protected function listen($ip, $port)
 	{
         $server = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
         socket_set_option($server, SOL_SOCKET, SO_REUSEADDR, 1);
@@ -66,7 +88,7 @@ class Router extends Base
 	/**
 	 * accept the connection
 	 */
-	public function accept()
+	protected function accept()
 	{
         $r = array($this->router);
         $w = $e = null;
@@ -85,15 +107,15 @@ class Router extends Base
 	/**
 	 * receive loop
 	 */
-	public function receive()
+	protected function receive()
 	{
 		if (!$this->routingTable) {
 			return ;
 		}
 		$r = $this->routingTable;
 		$w = $e = null;
-		socket_select($r, $w, $e, 1);
-		if (!$r) {
+		$status = socket_select($r, $w, $e, 1);
+		if ($status == 0 || !$r) {
 			return ;
 		}
 		foreach ($r as $dest=>$socket) {

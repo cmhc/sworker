@@ -18,14 +18,12 @@ class RouterProcess
 
     public function routerInit()
     {
-    	$this->router = new Router();
-    	$this->router->listen('0.0.0.0', 13000);
+    	$this->router = new Router('0.0.0.0', 13000);
     }
 
     public function router()
     {
-    	$this->router->accept();
-        $this->router->receive();
+    	$this->router->start();
     }
 }
 
