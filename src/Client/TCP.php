@@ -20,6 +20,11 @@ class TCP
 		$this->setName($name);
 	}
 
+	public function close()
+	{
+		fclose($this->connection);
+	}
+
 	/**
 	 * send message
 	 * @param  string $to

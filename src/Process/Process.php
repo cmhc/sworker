@@ -45,19 +45,30 @@ class Process extends Base
      */
     protected $master = array();
 
+    /**
+     * current worker
+     * @var array
+     */
+    protected $worker = array();
+
     public function __construct()
     {
         Option::init();
         $this->options = Option::getAll();
-
     }
 
     /**
-     * 处理在cs模式下面数据发送未完成的的情况
+     * executed before the peocess exits
      */
-    public function __descturt()
+    public function __destruct()
     {
-        
+        if (!$this->worker) {
+            return ;
+        }
+        $methodStopped = $this->worker['method'] . 'Stopped';
+        if (method_exists($this->worker['instance'], $methodStopped)) {
+            $this->worker['instance']->$methodStopped($this->worker['index']);
+        }
     }
 
     /**
@@ -70,10 +81,6 @@ class Process extends Base
 
     /**
      * 运行主方法
-     * @param   $class  
-     * @param   $method 
-     * @param   $args   
-     * @return          
      */
     public function start()
     {
@@ -88,7 +95,7 @@ class Process extends Base
 
         //守护进程
         if (isset($this->options['d'])) {
-            // 检查进程是否正在运行
+            //检查进程是否正在运行
             $this->checkProcess();            
             $this->daemonize();
         }
@@ -98,7 +105,7 @@ class Process extends Base
 
     /**
      * 添加master进程做的事情，不可以阻塞
-     * 比如在写webserver的时候，可以使用addGlobal添加监听，然后各个子进程都会监听
+     * 比如在写webserver的时候，可以使用addMaster添加监听，然后各个子进程都会监听
      */
     public function addMaster($class, $method)
     {
@@ -212,7 +219,7 @@ class Process extends Base
     }
 
     /**
-     * 输出帮助信息
+     * output help information， support custom help imformation
      */
     protected function helpInfo()
     {
@@ -251,14 +258,19 @@ class Process extends Base
 
         $worker = $this->workers[$index];
         if (is_object($worker['class'])) {
-            $obj = $worker['class'];
+            $instance = $worker['class'];
             $className = get_class($worker['class']);
         } else {
-            $obj = new $worker['class'];
+            $instance = new $worker['class'];
             $className = $worker['class'];
         }
-
         $method = $worker['method'];
+        $this->worker = array(
+            'instance' => $instance,
+            'class' => $className,
+            'method' => $worker['method'],
+            'index' => $index,
+        );
         $condition = true;
         $count = 0;
         $loop = isset($this->options['l']) ? $this->options['l'] : 1;
@@ -304,8 +316,8 @@ class Process extends Base
 
         //在执行之前，首先执行workerInit,只执行一次
         $methodInit = $method . 'Init';
-        if (method_exists($obj, $methodInit)) {
-            $obj->$methodInit($index);
+        if (method_exists($instance, $methodInit)) {
+            $instance->$methodInit($index);
         }
 
         while ($condition) {
@@ -328,7 +340,7 @@ class Process extends Base
             }
 
             //worker方法
-            $obj->$method($index, $worker['args'], $msg);
+            $instance->$method($index, $worker['args'], $msg);
 
             //如果是调度器，则执行发送消息方法,msg为引用参数
             //方法执行完成之后，方法需要发送的消息会保存参数$msg中
@@ -348,6 +360,7 @@ class Process extends Base
                 sleep($worker['interval']);
             }
         }
+
     }
 
 
@@ -395,12 +408,12 @@ class Process extends Base
     {
         if ($this->master) {
             if (is_object($this->master['class'])) {
-                $obj = $this->master['class'];
+                $instance = $this->master['class'];
             } else {
-                $obj = new $this->master['class'];
+                $instance = new $this->master['class'];
             }
             $method = $this->master['method'];
-            $obj->$method();
+            $instance->$method();
         }
         //fork worker进程
         for ($i = 0; $i < $this->workerCount; $i++) {
@@ -487,7 +500,7 @@ class Process extends Base
     public function childrenQuitSignal()
     {
         if (!$this->isMasterProcess()) {
-            exit;
+            exit();
         }
     }
 
