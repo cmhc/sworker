@@ -35,6 +35,8 @@ class Option
         self::$longKeys = array(
             'pid:', // pid保存路径
             'help',  // 帮助信息
+            'stdout:', // 普通输出
+            'stderr:' // 错误输出
         );
 
         self::$help = array(
@@ -47,6 +49,8 @@ class Option
             'u' => '指定以某个用户来执行该程序',
             'pid' => 'pid路径',
             'help' => '输出帮助信息',
+            'stdout' => '重定向输出路径, 当有选项e时候此选项生效',
+            'stderr' => '重定向错误输出路径, 当有选项e的时候此选项生效'
         );
     }
 

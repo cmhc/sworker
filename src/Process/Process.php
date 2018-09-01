@@ -590,8 +590,16 @@ class Process extends Base
         fclose(STDERR);
         $stdin = fopen('/dev/null', 'r');
         if (isset($this->options['e'])) {
-            $stdout = fopen('/tmp/client.out','a');
-            $stderr = fopen('/tmp/client.err','a');
+            if (isset($this->options['stdout']) && (false != $outlog = $this->options['stdout'])) {
+                $stdout = fopen($outlog, 'a');
+            } else {
+                $stdout = fopen('/tmp/client.out', 'a');
+            }
+            if (isset($this->options['stderr']) && (false != $errlog = $this->options['stderr'])) {
+                $stderr = fopen($errlog, 'a');
+            } else {
+                $stderr = fopen('/tmp/client.err','a');
+            }
         } else {
             $stdout = fopen('/dev/null','a');
             $stderr = fopen('/dev/null','a');
