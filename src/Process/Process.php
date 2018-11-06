@@ -130,28 +130,6 @@ class Process extends Base
     }
 
     /**
-     * 指定为调度器，负责数据的发送
-     * @param  array $sock 如果含有ip和port，则使用tcp模式，如果只有sock，则使用ipc模式
-     */
-    public function setDispatcher($sock)
-    {
-        $this->workers[$this->workerCount-1]['dispatcher'] = 1;
-        $this->workers[$this->workerCount-1]['sock'] = $sock;
-        return $this;
-    }
-
-    /**
-     * 指定为执行者，从调度器接收数据
-     * @param  array $sock 如果含有ip和port，则使用tcp模式，如果只有sock，则使用ipc模式
-     */
-    public function setExecutor($sock)
-    {
-        $this->workers[$this->workerCount-1]['executor'] = 1;
-        $this->workers[$this->workerCount-1]['sock'] = $sock;
-        return $this;
-    }
-
-    /**
      * 设置执行间隔
      * @param $seconds 单位为s
      */
@@ -275,31 +253,6 @@ class Process extends Base
         $count = 0;
         $loop = isset($this->options['l']) ? $this->options['l'] : 1;
         $this->setProcessTitle('Sworker: '. $className . "::" . $method . $index);
-        $dispatcher = isset($worker['dispatcher']) ? true : false;
-        $executor = isset($worker['executor']) ? true : false;
-        $msg = null;
-
-        //调度模式
-        if ($dispatcher || $executor) {
-            $sendStatus = true;
-            if (isset($worker['sock']['ip'])) {
-                $this->messenger = new Messenger\TCP();
-                if ($dispatcher) {
-                    $this->messenger->serverStart($worker['sock']['ip'], $worker['sock']['port']);
-                }
-                if ($executor) {
-                    $this->messenger->clientStart($method . $index, $worker['sock']['ip'], $worker['sock']['port']);
-                }
-            } else if (isset($worker['sock']['sock'])) {
-                $this->messenger = new Messenger\IPC();
-                if ($dispatcher) {
-                    $this->messenger->serverStart($worker['sock']['sock']);
-                }
-                if ($executor) {
-                    $this->messenger->clientStart($method . $index, $worker['sock']['sock']);
-                }
-            }
-        }
 
         //判断是否有延后设置
         if (isset($worker['after'])) {
@@ -321,32 +274,9 @@ class Process extends Base
         }
 
         while ($condition) {
-
-            if ($dispatcher && $sendStatus) {
-                //调度进程需要将消息写入msg,发送成功才清空，否则不清空
-                $msg = array();
-            }
-
-            if ($executor) {
-                //执行进程需要获取消息
-                $msg = $this->messenger->receive();
-            }
-
-            //executor有消息不终止
-            if ($executor && isset($msg) && $msg) {
-                $condition = true;
-            } else {
-                $pcntlExists && pcntl_signal_dispatch();
-            }
-
+            $pcntlExists && pcntl_signal_dispatch();
             //worker方法
             $instance->$method($index, $worker['args'], $msg);
-
-            //如果是调度器，则执行发送消息方法,msg为引用参数
-            //方法执行完成之后，方法需要发送的消息会保存参数$msg中
-            if ($dispatcher && !empty($msg)) {
-                $sendStatus = $this->messenger->send($msg[0], $msg[1]);
-            }
 
             if ($loop != 0) {
                 $count++;
@@ -360,10 +290,7 @@ class Process extends Base
                 sleep($worker['interval']);
             }
         }
-
     }
-
-
 
     /**
      * 转为守护进程

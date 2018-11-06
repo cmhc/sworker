@@ -1,13 +1,28 @@
 <?php
 /**
- * 两个进程之间通信
- * 首先需要启动路由器进程
+ * 使用router的进程间通信例子
  */
 namespace tests;
 require dirname(__DIR__) . '/autoload.php';
 
 use sworker\Client\TCP;
 use sworker\Process\Process;
+use sworker\Router\Router;
+
+class RouterProcess
+{
+	protected $router;
+
+    public function routerInit()
+    {
+    	$this->router = new Router('0.0.0.0', 13000);
+    }
+
+    public function router()
+    {
+    	$this->router->start();
+    }
+}
 
 /**
  * 两个互相通信的进程
@@ -17,6 +32,7 @@ class Messenger
 
 	public function proc1Init()
 	{
+		sleep(1);
 		$this->tcp = new TCP;
 		$this->tcp->connect('127.0.0.1', 13000, 'proc1');
 		echo "connected\n";
@@ -32,6 +48,7 @@ class Messenger
 
 	public function proc2Init()
 	{
+		sleep(1);
 		$this->tcp = new TCP;
 		$this->tcp->connect('127.0.0.1', 13000, 'proc2');
 		echo "connected\n";
@@ -47,6 +64,7 @@ class Messenger
 }
 
 $process = new Process();
+$process->addWorker('tests\RouterProcess', 'router');
 $process->addWorker('tests\Messenger', 'proc1');
 $process->addWorker('tests\Messenger', 'proc2');
 
