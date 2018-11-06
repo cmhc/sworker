@@ -1,6 +1,8 @@
 # sworker
 
-一个多进程框架。下面介绍sworker的使用方式
+sworker是一个多进程框架，能够让php脚本以守护进程的方式运行。通常用来处理队列，定时任务等。
+
+下面介绍sworker的使用方式
 
 ## 普通多进程模式
 
@@ -53,15 +55,15 @@
     use sworker\Process\Process;
     $process = new Process();
     //通过这两个组合，method进程会在每天的9点1分1s之后执行一次
-    $process->addWorker('Test', 'method')->interval(86400)->after(1,1,9);
+    $process->addWorker('Test', 'method')->interval(86400)->after('09:01');
     //这一步是开始执行
     $process->start();
 
 方法参数
 
-    Process::after($second[, $minute[, int $hour[, $day[, $month[, $year]]]]])
+    Process::after(string $time)
 
-    Process::interval($seconds)
+    Process::interval(int $seconds)
 
 ### 参数
 
@@ -79,7 +81,7 @@
 
 当然，可以扩充这些参数，Sworker提供Option类来扩充参数。在调用Process::addWorker()之前, 使用Option::add()方法来增加自定义的参数
 
-    Option::add(String $name[, Boolean $required = false[, String $description = '']]);
+    Option::add(string $name[, boolean $required = false[, string $description = '']]);
 
 name            参数名称必须以大写字母开头，和系统定义的参数区分开
 required        表明是否是必须要有值的参数
@@ -88,8 +90,64 @@ description     通过help打印出的描述信息
 
 ### 进程通信
 
-在1.1版本之后，Sworker增加了一个Router类，可以创建Router进程来实现进程之间的互相通信。Router进程可以形象的看作是一个路由器，需要通信的进程连接到路由器中即可互相通信，可以在samples/router.php查看路由进程是如何被创建的，可以在messenger.php中查看进程之间是如何通过路由进程互相通信的。
+在1.1版本之后，Sworker增加了一个Router类，可以创建Router进程来实现进程之间的互相通信。Router进程负责消息的转发。下面是创建一个router进程的方法
 
+    class RouterProcess
+    {
+        protected $router;
+        
+        public function routerInit()
+        {
+            $this->router = new Router('0.0.0.0', 13000);
+        }
+        
+        public function router()
+        {
+            $this->router->start();
+        }
+    }
+        
+    $process = new Process();
+    $process->addWorker('RouterProcess', 'router');
 
+之后可以使用messenger提供的一些通信方法进行进程间通信，比如使用tcp进行通信
 
+    class Messenger
+    {
+        
+        public function proc1Init()
+        {
+            sleep(1);
+            $this->tcp = new TCP;
+            $this->tcp->connect('127.0.0.1', 13000, 'proc1');
+            echo "connected\n";
+        }
+        
+        public function proc1()
+        {
+            for ($i=0;$i<100;$i++) {
+                $data = $this->tcp->receive();
+                print_r($data);
+            }
+        }
+        
+        public function proc2Init()
+        {
+            sleep(1);
+            $this->tcp = new TCP;
+            $this->tcp->connect('127.0.0.1', 13000, 'proc2');
+            echo "connected\n";
+        }
+        
+        public function proc2()
+        {
+            for ($i=0; $i<100;$i++) {
+                $this->tcp->send('proc1', "hello world".$i);
+                sleep(1);
+            }
+        }
+    }
+    $process->addWorker('tests\Messenger', 'proc1');
+    $process->addWorker('tests\Messenger', 'proc2');
+    $process->start();
 
