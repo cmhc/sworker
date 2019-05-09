@@ -1,6 +1,6 @@
 {
     "name": "cmhc/sworker",
-    "description": "only a multiprocess framework for php",
+    "description": "一个php多进程框架",
     "authors": [
         {
             "name": "huchao",
@@ -9,8 +9,8 @@
     ],
     "require": {},
     "autoload": {
-		"psr-4": {
-			"sworker\\": "src/"
-		}
-	}
+        "psr-4": {
+            "sworker\\": "src/"
+        }
+    }
 }
