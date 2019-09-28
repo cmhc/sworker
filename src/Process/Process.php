@@ -252,7 +252,8 @@ class Process extends Base
         $condition = true;
         $count = 0;
         $loop = isset($this->options['l']) ? $this->options['l'] : 1;
-        $this->setProcessTitle('Sworker: '. $className . "::" . $method . $index);
+        $processTitle = sprintf('Sworker: %s::%s[%d]', str_replace('\\', '_', $className), $method, $index);
+        $this->setProcessTitle($processTitle);
 
         //判断是否有延后设置
         if (isset($worker['after'])) {
@@ -276,7 +277,7 @@ class Process extends Base
         while ($condition) {
             $pcntlExists && pcntl_signal_dispatch();
             //worker方法
-            $instance->$method($index, $worker['args'], $msg);
+            $instance->$method($index, $worker['args']);
 
             if ($loop != 0) {
                 $count++;
