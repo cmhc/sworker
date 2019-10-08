@@ -96,7 +96,7 @@ class Process extends Base
         //守护进程
         if (isset($this->options['d'])) {
             //检查进程是否正在运行
-            $this->checkProcess();            
+            $this->checkProcess();
             $this->daemonize();
         }
 
@@ -156,15 +156,19 @@ class Process extends Base
      * 初始化一些进程信息
      * 1. pid文件名称
      * 2. 是否显示错误信息
+     * @return  void
      */
     protected function initProcessInfo()
     {
-        $pidPath = dirname(dirname(__DIR__)) . '/pid';
+        if (isset($this->options['pid'])) {
+            $this->pidFile = $this->options['pid'];
+        } else {
+            $this->pidFile = dirname(dirname(__DIR__)) . '/pid/' . basename($GLOBALS['argv'][0], '.php') . '.pid';
+        }
+        $pidPath = dirname($this->pidFile);
         if (!file_exists($pidPath) && !mkdir($pidPath)) {
             throw new Exception("创建pid文件夹失败", 1);
         }
-        $pidName = isset($this->options['pid']) ? $this->options['pid'] : basename($GLOBALS['argv'][0], '.php') . '.pid';
-        $this->pidFile = $pidPath . '/' . $pidName;
         if (isset($this->options['e'])) {
             error_reporting(E_ALL);
             ini_set('display_errors', true);
@@ -173,6 +177,7 @@ class Process extends Base
 
     /**
      * 检查进程是否在执行
+     * @return  void
      */
     protected function checkProcess()
     {
@@ -184,6 +189,7 @@ class Process extends Base
     /**
      * 设置进程名称
      * @param  string $title 进程名称
+     * @return  void
      */
     protected function setProcessTitle($title)
     {
@@ -197,7 +203,8 @@ class Process extends Base
     }
 
     /**
-     * output help information， support custom help imformation
+     * 输出帮助信息
+     * @return void
      */
     protected function helpInfo()
     {
@@ -221,6 +228,8 @@ class Process extends Base
 
     /**
      * 执行一个worker
+     * @param  int $index worker索引号
+     * @return  void
      */
     protected function worker($index)
     {
